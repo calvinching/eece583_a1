@@ -1477,7 +1477,6 @@ drawline (float x1, float y1, float x2, float y2)
 void 
 drawrect (float x1, float y1, float x2, float y2) 
 {
-    printf("Drawing rect: (%f, %f) (%f, %f)\n", x1, y1, x2, y2);
 	int xw1, yw1, xw2, yw2;
 #ifdef WIN32
 	HPEN hOldPen;

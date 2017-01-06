@@ -3,6 +3,10 @@
 #include "graphics.h"
 #include "common.h"
 
+//#define DEBUG
+#define SUCCESS 0
+#define ERROR -1
+
 void delay (void);
 void button_press (float x, float y, int flags);
 void drawscreen (void);
@@ -10,39 +14,56 @@ void new_button_func (void (*drawscreen_ptr) (void));
 void mouse_move (float x, float y);
 void key_press (int i);
 void init_grid();
+int parse_file(char *file);
 
-void clean_up(void) {
-    // function to do "clean up" when the graphics window is closed unexpectedly.
-}
+int num_rows = 0;
+int num_columns = 0;
 
 typedef struct CELL {
-    float x1;
-    float x2;
-    float y1;
-    float y2;
-    char text[5];
-    float text_x;
-    float text_y;
+    float x1;       // x-coordinate of the cell's top left corner
+    float y1;       // y-coordinate of the cell's top left corner
+    float x2;       // x-coordinate of the cell's bottom right corner
+    float y2;       // y-coordinate of the cell's bottom right corner
+    char text[5];   // text of the cell
+    float text_x;   // x-coordinate of the text
+    float text_y;   // y-coordinate of the text
+
+    bool is_obstruction;    // true if this cell is an obstruction for wiring
+    bool is_source;         // true if it's a source
+    bool is_sink;           // true if it's a sink
+    int wire_num;
 };
 
 CELL **grid;
 
-int num_rows = 10;
-int num_columns = 5;
+void clean_up(void) {
+    // Clean up dynamically allocated grid
+    for (int col = 0; col < num_columns; col++) {
+        free(grid[col]);
+    }
+    free(grid);
+}
 
-int main() {
+int main(int argc, char *argv[]) {
 
     int i;
-    
+
+    if (argc != 2) {
+        printf("Need input file\n");
+        exit(1);
+    }
+
+    char *file = argv[1];
+    printf("Input file: %s\n", file);
+
     // initialize display with WHITE background, and define a clean_up function
     init_graphics("Some Example Graphics", WHITE, clean_up);
     init_world(0.,0.,1000.,1000.);
-    init_grid();
-    printf("creating button\n");
-    printf("grid: %f\n", grid[0][0].x1);
+
+    parse_file(file);
+
     create_button("Window", "New Button", new_button_func);
-    printf("finished creating button\n");
-    drawscreen(); 
+    drawscreen();
     event_loop(button_press, mouse_move, key_press, drawscreen);
     return 0;
 }
@@ -55,7 +76,9 @@ void init_grid() {
 
     t_report report;
     report_structure(&report);
+#ifdef DEBUG
     printf("width: %d, height: %d\n", report.top_width, report.top_height);
+#endif
 
     float height = report.top_height;
     float width = report.top_width;
@@ -63,41 +86,167 @@ void init_grid() {
     float cell_width = width / num_columns;
 
     // Allocate memory for the grid
-    grid = (CELL **)my_malloc(num_rows * sizeof(CELL *));
-    for (int i = 0; i < num_rows; i++) {
-        grid[i] = (CELL *)my_malloc(num_columns * sizeof(CELL));
+    grid = (CELL **)my_malloc(num_columns * sizeof(CELL *));
+    for (int col = 0; col < num_columns; col++) {
+        grid[col] = (CELL *)my_malloc(num_rows * sizeof(CELL));
     }
 
-    printf("cell height: %f, cell width: %f\n", cell_height, cell_width);
-
-    for (int i = 0; i < num_rows; i++) {
-        for (int j = 0; j < num_columns; j++) {
-            grid[i][j].x1 = cell_width * j;
-            grid[i][j].y1 = cell_height * i;
-            grid[i][j].x2 = cell_width + cell_width * j;
-            grid[i][j].y2 = cell_height + cell_height * i;
-            grid[i][j].text_x = grid[i][j].x2 - cell_width / 2.;
-            grid[i][j].text_y = grid[i][j].y2 - cell_height / 2.;
-            printf("grid[%d][%d] = (%f, %f) (%f, %f) (%f, %f)\n", i, j, grid[i][j].x1, grid[i][j].y1, grid[i][j].x2, grid[i][j].y2, grid[i][j].text_x, grid[i][j].text_y);
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            grid[col][row].x1 = cell_width * col;
+            grid[col][row].y1 = cell_height * row;
+            grid[col][row].x2 = cell_width + cell_width * col;
+            grid[col][row].y2 = cell_height + cell_height * row;
+            grid[col][row].text_x = grid[col][row].x2 - cell_width / 2.;
+            grid[col][row].text_y = grid[col][row].y2 - cell_height / 2.;
+            grid[col][row].is_obstruction = false;
+            grid[col][row].is_source = false;
+            grid[col][row].is_sink = false;
+            grid[col][row].wire_num = -1;
+#ifdef DEBUG
+            printf("grid[%d][%d] = (%f, %f) (%f, %f) (%f, %f)\n", col, row, grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2, grid[col][row].text_x, grid[col][row].text_y);
+#endif
         }
     }
 }
 
 void draw_grid() {
-    printf("draw_grid\n");
     // Draw grid
-    for (int i = 0; i < num_rows; i++) {
-        for (int j = 0; j < num_columns; j++) {
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
             char text[10] = "";
-            sprintf(text, "(%d, %d)", i, j);
-            drawrect(grid[i][j].x1, grid[i][j].y1, grid[i][j].x2, grid[i][j].y2); 
-            drawtext(grid[i][j].text_x, grid[i][j].text_y, text, 150.);
+            if (grid[col][row].is_obstruction) {
+                setcolor(BLUE);
+                fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+                setcolor(BLACK);
+                drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+            } else if (grid[col][row].wire_num != -1) {
+                setcolor(GREEN + grid[col][row].wire_num);
+                fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+                setcolor(BLACK);
+                drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+                sprintf(text, "%d (%s)", grid[col][row].wire_num, grid[col][row].is_source ? "src" : "snk");
+                drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
+            } else {
+                setcolor(BLACK);
+                sprintf(text, "(%d, %d)", col, row);
+                drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+                drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
+            }
         }
     }
 }
 
+#define GRID_SIZE 0
+#define NUM_OBSTRUCTED_CELLS 1
+
+int parse_file(char *file) {
+    FILE *fp;
+    int ret = ERROR;
+
+    if (file != NULL) {
+        fp = fopen(file, "r");
+        if (fp == NULL) {
+            printf("Failed to open file: %s\n", file);
+        } else {
+            char *line;
+            size_t len = 0;
+            ssize_t read;
+
+            int line_num = 0;
+            int num_obstructed_cells = 0;
+            int num_wires_to_route = 0;
+
+            while ((read = getline(&line, &len, fp)) != -1) {
+#ifdef DEBUG
+                printf("parse_file[%d]: %s", line_num, line);
+#endif
+                switch (line_num) {
+                    case GRID_SIZE:
+                    {
+                        const char delim[2] = " ";
+                        char *token;
+
+                        token = strtok(line, delim);
+                        num_columns = atoi(token);
+                        token = strtok(NULL, delim);
+                        num_rows = atoi(token);
+                        printf("num_rows: %d num_columns: %d\n", num_rows, num_columns);
+                        init_grid();
+                    }
+                    break;
+                    case NUM_OBSTRUCTED_CELLS:
+                    {
+                        num_obstructed_cells = atoi(line);
+                        printf("num_obstructed_cells: %d\n", num_obstructed_cells);
+
+                        while (line_num - NUM_OBSTRUCTED_CELLS < num_obstructed_cells && (read = getline(&line, &len, fp)) != -1) {
+                            const char delim[2] = " ";
+                            char *token;
+                            token = strtok(line, delim);
+                            int col = atoi(token);
+                            token = strtok(NULL, delim);
+                            int row = atoi(token);
+                            printf("(%d, %d) is obstruction\n", col, row);
+                            grid[col][row].is_obstruction = true;
+                            line_num++;
+                        }
+                    }
+                    break;
+                    default: // NUM_WIRES_TO_ROUTE
+                    {
+                        num_wires_to_route = atoi(line);
+                        int cur_wire = 0;
+                        printf("num_wires_to_route: %d\n", num_wires_to_route);
+
+                        while (cur_wire < num_wires_to_route && (read = getline(&line, &len, fp)) != -1) {
+                            const char delim[2] = " ";
+                            char *token;
+                            token = strtok(line, delim);
+                            int num_pins = atoi(token);
+                            int idx = 0;
+                            printf("Number of pins: %d\n", num_pins);
+
+                            while (num_pins > 0) {
+                                token = strtok(NULL, delim);
+                                int col = atoi(token);
+                                token = strtok(NULL, delim);
+                                int row = atoi(token);
+
+                                // First one is a source; rest are sinks
+                                if (idx == 0) {
+                                    grid[col][row].is_source = true;
+                                    grid[col][row].wire_num = cur_wire;
+                                    printf("(%d, %d) is a source\n", col, row);
+                                    idx++;
+                                } else {
+                                    grid[col][row].is_sink = true;
+                                    grid[col][row].wire_num = cur_wire;
+                                    printf("(%d, %d) is a sink\n", col, row);
+                                }
+
+                                num_pins--;
+                            }
+                            cur_wire++;
+                        }
+                    }
+                    break;
+                }
+                line_num++;
+            }
+
+            fclose(fp);
+            if (line) {
+                free(line);
+            }
+        }
+    } else {
+        printf("Invalid file!");
+    }
+    return ret;
+}
+
 void drawscreen (void) {
-    printf("draw_screen\n");
     /**
      * redrawing routine for still pictures.  Graphics package calls
      * this routine to do redrawing after the user changes the window
@@ -151,7 +300,7 @@ void drawscreen (void) {
         current_col++;
     }
     */
-/*
+    /*
     setfontsize (10);
     setlinestyle (SOLID);
     setlinewidth (1);
@@ -208,7 +357,7 @@ void drawscreen (void) {
  drawtext (500.,450.,"fillpoly",150.);
  setcolor (DARKGREEN);
  drawtext (500.,610.,"drawrect",150.);
- drawrect (350.,550.,650.,670.); 
+ drawrect (350.,550.,650.,670.);
 
  setcolor (BLACK);
  setfontsize (8);
@@ -244,10 +393,10 @@ void delay (void) {
  int i, j, k, sum;
 
  sum = 0;
- for (i=0;i<100;i++) 
+ for (i=0;i<100;i++)
     for (j=0;j<i;j++)
-       for (k=0;k<30;k++) 
-          sum = sum + i+j-k; 
+       for (k=0;k<30;k++)
+          sum = sum + i+j-k;
 }
 
 void button_press (float x, float y, int flags) {
