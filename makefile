@@ -18,7 +18,7 @@ HDR = graphics.h easygl_constants.h common.h
 SRC = graphics.cpp example.c common.cpp
 EXE = example
 BACKUP_FILENAME=`date "+backup-%Y%m%d-%H%M.zip"`
-FLAGS = -g -Wall -D$(PLATFORM)
+FLAGS = -g -Wall -Wno-write-strings -D$(PLATFORM)
 
 # Need to tell the linker to link to the X11 libraries.
 # WIN32 automatically links to the win32 API libraries (no need for flags)

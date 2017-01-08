@@ -1,7 +1,7 @@
 #define TRUE 1
 #define FALSE 0
 
-#define VERBOSE
+//#define VERBOSE
 
 #ifndef NO_GRAPHICS
 

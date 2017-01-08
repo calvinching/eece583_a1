@@ -1,20 +1,22 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include "graphics.h"
 #include "common.h"
 
-//#define DEBUG
+#define DEBUG
 #define SUCCESS 0
 #define ERROR -1
 
-void delay (void);
 void button_press (float x, float y, int flags);
-void drawscreen (void);
-void new_button_func (void (*drawscreen_ptr) (void));
+void drawscreen();
+void proceed_button_func(void (*drawscreen_ptr) (void));
 void mouse_move (float x, float y);
 void key_press (int i);
 void init_grid();
+void delay();
 int parse_file(char *file);
+void run_lee_moore_algo();
 
 int num_rows = 0;
 int num_columns = 0;
@@ -31,10 +33,33 @@ typedef struct CELL {
     bool is_obstruction;    // true if this cell is an obstruction for wiring
     bool is_source;         // true if it's a source
     bool is_sink;           // true if it's a sink
-    int wire_num;
-};
+    bool is_routed;         // true if we've tried routing this cell
+    bool is_wire;           // true if the cell is a wire
+    int wire_num;           // wire number (i.e. the net number)
+    int value;              // value of the lee-moore algo
+} CELL;
 
 CELL **grid;
+
+int cur_src_col = -1;
+int cur_src_row = -1;
+int cur_wire_num = -1;
+
+typedef struct LOCATION {
+    int col;
+    int row;
+
+    LOCATION *next;
+    LOCATION *prev;
+};
+void add_to_list(LOCATION **head, LOCATION * g);
+LOCATION *pop_from_list(LOCATION **head);
+void remove_from_list(LOCATION **head, LOCATION *remove);
+
+LOCATION *expansion_list = NULL;
+bool target_found = false;
+
+
 
 void clean_up(void) {
     // Clean up dynamically allocated grid
@@ -44,10 +69,19 @@ void clean_up(void) {
     free(grid);
 }
 
+void delay (void) {
+
+    int i, j, k, sum;
+
+    sum = 0;
+    for (i=0;i<100;i++) 
+        for (j=0;j<i;j++)
+            for (k=0;k<30;k++) 
+                sum = sum + i+j-k; 
+}
+
+
 int main(int argc, char *argv[]) {
-
-    int i;
-
     if (argc != 2) {
         printf("Need input file\n");
         exit(1);
@@ -62,18 +96,13 @@ int main(int argc, char *argv[]) {
 
     parse_file(file);
 
-    create_button("Window", "New Button", new_button_func);
+    create_button("Window", "Proceed", proceed_button_func);
     drawscreen();
     event_loop(button_press, mouse_move, key_press, drawscreen);
     return 0;
 }
 
 void init_grid() {
-    float x1 = 0;
-    float y1 = 0;
-    float x2 = 0;
-    float y2 = 0;
-
     t_report report;
     report_structure(&report);
 #ifdef DEBUG
@@ -102,7 +131,10 @@ void init_grid() {
             grid[col][row].is_obstruction = false;
             grid[col][row].is_source = false;
             grid[col][row].is_sink = false;
+            grid[col][row].is_routed = false;
+            grid[col][row].is_wire = false;
             grid[col][row].wire_num = -1;
+            grid[col][row].value = -1;
 #ifdef DEBUG
             printf("grid[%d][%d] = (%f, %f) (%f, %f) (%f, %f)\n", col, row, grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2, grid[col][row].text_x, grid[col][row].text_y);
 #endif
@@ -116,16 +148,28 @@ void draw_grid() {
         for (int row = 0; row < num_rows; row++) {
             char text[10] = "";
             if (grid[col][row].is_obstruction) {
+                // Draw obstruction
                 setcolor(BLUE);
                 fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
             } else if (grid[col][row].wire_num != -1) {
+                // Draw source and sinks
                 setcolor(GREEN + grid[col][row].wire_num);
                 fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
-                sprintf(text, "%d (%s)", grid[col][row].wire_num, grid[col][row].is_source ? "src" : "snk");
+                if (grid[col][row].value != -1) {
+                    sprintf(text, "%d", grid[col][row].value);
+                } else {
+                    sprintf(text, "%d (%s)", grid[col][row].wire_num, grid[col][row].is_source ? "src" : "snk");
+                }
+                drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
+            } else if (grid[col][row].value != -1) {
+                // Draw expansion list
+                setcolor(BLACK);
+                sprintf(text, "%d", grid[col][row].value);
+                drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
             } else {
                 setcolor(BLACK);
@@ -246,7 +290,7 @@ int parse_file(char *file) {
     return ret;
 }
 
-void drawscreen (void) {
+void drawscreen() {
     /**
      * redrawing routine for still pictures.  Graphics package calls
      * this routine to do redrawing after the user changes the window
@@ -385,50 +429,295 @@ void drawscreen (void) {
  */
 }
 
-
-void delay (void) {
-
-/* A simple delay routine for animation. */
-
- int i, j, k, sum;
-
- sum = 0;
- for (i=0;i<100;i++)
-    for (j=0;j<i;j++)
-       for (k=0;k<30;k++)
-          sum = sum + i+j-k;
+void button_press(float x, float y, int flags) {
+    printf("User clicked a button at coordinates (%f, %f)\n", x, y);
 }
 
-void button_press (float x, float y, int flags) {
 
-/* Called whenever event_loop gets a button press in the graphics *
- * area.  Allows the user to do whatever he/she wants with button *
- * clicks.                                                        */
+void proceed_button_func(void (*drawscreen_ptr) (void)) {
+    while (!target_found) {
+    // Run the algorithm
+    run_lee_moore_algo();
+    drawscreen();
+    delay();
+    }
+}
 
- printf("User clicked a button at coordinates (%f, %f)", x, y);
-#ifdef WIN32
- if (flags & MOUSECLK_CONTROL)
-     printf(", CTRL pressed");
- if (flags & MOUSECLK_SHIFT)
-     printf(", SHIFT pressed");
+bool find_new_source() {
+    bool found = false;
+    for (int col = 1; col < num_columns; col++) {
+        for (int row = 1; row < num_rows; row++) {
+            // Find a new source to route
+            if (grid[col][row].is_source && !grid[col][row].is_routed) {
+                cur_src_col = col;
+                cur_src_row = row;
+                cur_wire_num = grid[col][row].wire_num;
+                found = true;
+                grid[col][row].is_routed = true;
+                break;
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    printf("New current source: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+    return found;
+}
+
+LOCATION *find_smallest_value() {
+    LOCATION *cur = expansion_list;
+    LOCATION *smallest = NULL;
+    int smallest_val = INT_MAX;
+
+    while (cur != NULL) {
+        if (grid[cur->col][cur->row].value < smallest_val) {
+            smallest_val = grid[cur->col][cur->row].value;
+            smallest = cur;
+        }
+        cur = cur->next;
+    }
+
+    if (smallest != NULL) {
+        printf("Smallest cell in expansion_list: (%d, %d)\n", smallest->col, smallest->row);
+        // Remove the smallest one from the expansion list
+        remove_from_list(&expansion_list, smallest);
+    } else {
+        printf("ERROR: Cannot find the smallest cell in expansion_list\n");
+    }
+
+    return smallest;
+}
+
+void remove_from_list(LOCATION **head, LOCATION *remove) {
+    LOCATION *cur = *head;
+
+    while (cur != NULL) {
+        if (cur->col == remove->col && cur->row == remove->row) {
+            // Found the item in the list
+            if (cur == *head) {
+                // First item in the list
+                *head = cur->next;
+                if (cur->next != NULL) {
+                    (*head)->prev = NULL;
+                }
+                cur->next = NULL;
+                cur->prev = NULL;
+            } else if (cur->next == NULL) {
+                // Last item in the list
+                cur->prev->next = NULL;
+                cur->next = NULL;
+                cur->prev = NULL;
+            } else {
+                // Middle of the list
+                cur->next->prev = cur->prev;
+                cur->prev->next = cur->next;
+                cur->next = NULL;
+                cur->prev = NULL;
+            }
+            break;
+        }
+        cur = cur->next;
+    }
+}
+
+/**
+ * See if coordinates (c, r) are valid. Only valid if c and r are both greater
+ * than 0 and less than the bounds of the grid.
+ */
+bool is_valid_coordinates(int col, int row) {
+    return (col >= 0 && row >=0 && col < num_columns && row < num_rows);
+}
+
+bool is_valid_neighbor(int col, int row) {
+    return (is_valid_coordinates(col, row) &&
+        !grid[col][row].is_obstruction &&
+        grid[col][row].value == -1 &&
+        !grid[col][row].is_wire);
+}
+
+LOCATION *make_location(int col, int row) {
+    LOCATION *g = (LOCATION *)malloc(sizeof(LOCATION));
+    g->col = col;
+    g->row = row;
+    g->next = NULL;
+    g->prev = NULL;
+
+    return g;
+}
+
+LOCATION *find_all_neighbors(int col, int row) {
+    // Neighbors is deemed as the one on top, below, left, and right of (col, row)
+    LOCATION *neighbors = NULL;
+    int c, r;
+
+#ifdef DEBUG
+    printf("Find all neighbors for (%d, %d)\n", col, row);
 #endif
- printf("\n");
+
+    // Top
+    c = col;
+    r = row - 1;
+    if (is_valid_neighbor(c, r)) {
+        LOCATION *g = make_location(c, r);
+        neighbors = g;
+#ifdef DEBUG
+        printf("Found top neighbor (%d, %d)\n", c, r);
+#endif
+    }
+
+    // Bottom
+    c = col;
+    r = row + 1;
+    if (is_valid_neighbor(c, r)) {
+        LOCATION *g = make_location(c, r);
+        add_to_list(&neighbors, g);
+#ifdef DEBUG
+        printf("Found bottom neighbor (%d, %d)\n", c, r);
+#endif
+    }
+
+    // Left
+    c = col - 1;
+    r = row;
+    if (is_valid_neighbor(c, r)) {
+        LOCATION *g = make_location(c, r);
+        add_to_list(&neighbors, g);
+#ifdef DEBUG
+        printf("Found left neighbor (%d, %d)\n", c, r);
+#endif
+    }
+
+    // Right
+    c = col + 1;
+    r = row;
+    if (is_valid_neighbor(c, r)) {
+        LOCATION *g = make_location(c, r);
+        add_to_list(&neighbors, g);
+#ifdef DEBUG
+        printf("Found right neighbor (%d, %d)\n", c, r);
+#endif
+    }
+    return neighbors;
 }
 
+void run_lee_moore_algo() {
+#ifdef DEBUG
+    printf("Running lee-moore algo\n");
+#endif
 
-void new_button_func (void (*drawscreen_ptr) (void)) {
+    // Really, if any is -1, they should all be -1s...
+    if (cur_src_col == -1 || cur_src_row == -1 || cur_wire_num == -1) {
+        if (!find_new_source()) {
+            printf("Attempted all sources!\n");
+            return;
+        }
+    }
 
- printf ("You pressed the new button!\n");
- setcolor (MAGENTA);
- setfontsize (12);
- drawtext (500., 500., "You pressed the new button!", 10000.);
+    if (grid[cur_src_col][cur_src_row].value == -1) {
+        // First step
+        grid[cur_src_col][cur_src_row].value = 1;
+        LOCATION *g = make_location(cur_src_col, cur_src_row);
+        expansion_list = g;
+        printf("Labeled source (%d, %d) as first step!\n", cur_src_col, cur_src_row);
+        return;
+    } else if (expansion_list != NULL) {
+        int col, row;
+        // Find the cell in the expansion list with the smallest value
+        LOCATION *g = find_smallest_value();
+        if (g != NULL) {
+            if (grid[g->col][g->row].is_sink && grid[g->col][g->row].wire_num == grid[cur_src_col][cur_src_row].wire_num) {
+                target_found = true;
+                printf("Found the target (%d, %d)\n", g->col, g->row);
+                // g is the target, done!
+                return;
+            }
+
+            LOCATION *neighbors = find_all_neighbors(g->col, g->row);
+            LOCATION *cur = NULL;
+            while ((cur = pop_from_list(&neighbors)) != NULL) {
+                col = cur->col;
+                row = cur->row;
+                // if neighbor is unlabelled
+                if (grid[col][row].value == -1) {
+                    // label it with the label of g + 1
+                    grid[col][row].value = grid[g->col][g->row].value + 1;
+
+                    printf("expansion_list: %p\n", expansion_list);
+
+                    // add neighbor to expansion list
+                    add_to_list(&expansion_list, cur);
+                }
+            }
+        } else {
+            printf("ERROR: cannot find smallest value...\n");
+            return;
+        }
+    } else if (target_found == false) {
+        // Loop has terminated (i.e. couldn't hit a target), then fail
+        printf("WARNING: Failed to route src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+        return;
+    } else {
+        // Traceback begins
+        printf("Beginning traceback of src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+    }
 }
 
-void mouse_move (float x, float y) {
+LOCATION *pop_from_list(LOCATION **head) {
+    LOCATION *tmp = NULL;
+    LOCATION *g = NULL;
+
+    if (*head != NULL) {
+        tmp = (*head)->next;
+        if (tmp != NULL) {
+            tmp->prev = NULL;
+        }
+
+        g = *head;
+        g->next = NULL;
+        g->prev = NULL;
+
+        *head = tmp;
+    }
+#ifdef DEBUG
+    if (g != NULL) {
+        printf("Popped (%d, %d)\n", g->col, g->row);
+    } else {
+        printf("Didn't pop anything...\n");
+    }
+#endif
+
+    return g;
+}
+
+void add_to_list(LOCATION **head, LOCATION * g) {
+    LOCATION *cur = *head;
+
+#ifdef DEBUG
+    printf("Adding (%d, %d) to list\n", g->col, g->row);
+#endif
+
+    if (*head == NULL) {
+        *head = g;
+        return;
+    }
+
+    // Go to the end of the list
+    while (cur->next != NULL) {
+        cur = cur->next;
+    }
+
+    cur->next = g;
+    g->prev = cur;
+    g->next = NULL;
+}
+
+void mouse_move(float x, float y) {
     // function to handle mouse move event, the current mouse position in the current world coordinate
     // as defined as MAX_X and MAX_Y in init_world is returned
 }
 
-void key_press (int i) {
+void key_press(int i) {
     // function to handle keyboard press event, the ASCII character is returned
 }
