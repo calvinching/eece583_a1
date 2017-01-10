@@ -11,6 +11,7 @@
 void button_press (float x, float y, int flags);
 void drawscreen();
 void proceed_button_func(void (*drawscreen_ptr) (void));
+void proceed_fast_button_func(void (*drawscreen_ptr) (void));
 void mouse_move (float x, float y);
 void key_press (int i);
 void init_grid();
@@ -43,6 +44,10 @@ CELL **grid;
 
 int cur_src_col = -1;
 int cur_src_row = -1;
+int cur_target_col = -1;
+int cur_target_row = -1;
+int cur_trace_col = -1;
+int cur_trace_row = -1;
 int cur_wire_num = -1;
 
 typedef struct LOCATION {
@@ -51,7 +56,7 @@ typedef struct LOCATION {
 
     LOCATION *next;
     LOCATION *prev;
-};
+} LOCATION;
 void add_to_list(LOCATION **head, LOCATION * g);
 LOCATION *pop_from_list(LOCATION **head);
 void remove_from_list(LOCATION **head, LOCATION *remove);
@@ -59,7 +64,13 @@ void remove_from_list(LOCATION **head, LOCATION *remove);
 LOCATION *expansion_list = NULL;
 bool target_found = false;
 
+typedef enum STATE {
+    IDLE,
+    EXPANSION,
+    TRACEBACK
+} STATE;
 
+STATE cur_state;
 
 void clean_up(void) {
     // Clean up dynamically allocated grid
@@ -69,7 +80,7 @@ void clean_up(void) {
     free(grid);
 }
 
-void delay (void) {
+void delay(void) {
 
     int i, j, k, sum;
 
@@ -94,9 +105,11 @@ int main(int argc, char *argv[]) {
     init_graphics("Some Example Graphics", WHITE, clean_up);
     init_world(0.,0.,1000.,1000.);
 
+    cur_state = IDLE;
     parse_file(file);
 
     create_button("Window", "Proceed", proceed_button_func);
+    create_button("Window", "Proceed Fast", proceed_fast_button_func);
     drawscreen();
     event_loop(button_press, mouse_move, key_press, drawscreen);
     return 0;
@@ -159,7 +172,9 @@ void draw_grid() {
                 fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
-                if (grid[col][row].value != -1) {
+                if (grid[col][row].is_wire && !(grid[col][row].is_source || grid[col][row].is_sink)) {
+                    sprintf(text, "%d (w)", grid[col][row].wire_num);
+                } else if (grid[col][row].value != -1) {
                     sprintf(text, "%d", grid[col][row].value);
                 } else {
                     sprintf(text, "%d (%s)", grid[col][row].wire_num, grid[col][row].is_source ? "src" : "snk");
@@ -291,155 +306,24 @@ int parse_file(char *file) {
 }
 
 void drawscreen() {
-    /**
-     * redrawing routine for still pictures.  Graphics package calls
-     * this routine to do redrawing after the user changes the window
-     * in any way.
-     */
-    t_point polypts[3] = {{500.,400.},{450.,480.},{550.,480.}};
-    t_point polypts2[4] = {{700.,400.},{650.,480.},{750.,480.}, {800.,400.}};
-
     clearscreen();  /* Should be first line of all drawscreens */
-
     draw_grid();
-    /*
-    t_report report;
-    report_structure(&report);
-    printf("width: %d, height: %d\n", report.top_width, report.top_height);
-    float height = report.top_height;
-    float width = report.top_width;
-    float x1 = 0;
-    float y1 = 0;
-    float x2 = 0;
-    float y2 = 0;
-    int current_row = 0;
-    int current_col = 0;
-    float height_per_row = height / num_rows;
-    float width_per_col = width / num_columns;
-
-    // Draw the grid. First draw the rows
-    while (current_row < num_rows) {
-        x1 = 0;
-        y1 += height_per_row;
-        x2 = width;
-        y2 = y1;
-        printf("Drawing (%f, %f) to (%f, %f)\n", x1, y1, x2, y2);
-        drawline(x1, y1, x2, y2);
-        current_row++;
-    }
-
-    // Reset counters;
-    x1 = 0;
-    x2 = 0;
-    y1 = 0;
-    y2 = 0;
-
-    // Draw the columns
-    while (current_col < num_columns) {
-        x1 += width_per_col;
-        y1 = 0;
-        x2 = x1;
-        y2 = height;
-        drawline(x1, y1, x2, y2);
-        current_col++;
-    }
-    */
-    /*
-    setfontsize (10);
-    setlinestyle (SOLID);
-    setlinewidth (1);
-    setcolor (BLACK);
-
-    drawtext (0.,55.,"Colors",150.);
-    setcolor (LIGHTGREY);
-    fillrect (150.,30.,200.,80.);
-    setcolor (DARKGREY);
-    fillrect (200.,30.,250.,80.);
-    setcolor (WHITE);
-    fillrect (250.,30.,300.,80.);
-    setcolor (BLACK);
-    fillrect (300.,30.,350.,80.);
-    setcolor (BLUE);
-    fillrect (350.,30.,400.,80.);
-    setcolor (GREEN);
-    fillrect (400.,30.,450.,80.);
-    setcolor (YELLOW);
-    fillrect (450.,30.,500.,80.);
-    setcolor (CYAN);
-    fillrect (500.,30.,550.,80.);
-    setcolor (RED);
-    fillrect (550.,30.,600.,80.);
-    setcolor (DARKGREEN);
-    fillrect (600.,30.,650.,80.);
-    setcolor (MAGENTA);
-    fillrect (650.,30.,700.,80.);
-
- setcolor (WHITE);
- drawtext (400.,55.,"fillrect",150.);
- setcolor (BLACK);
- drawtext (500.,150.,"drawline",150.);
- setlinestyle (SOLID);
- drawline (440.,120.,440.,200.);
- setlinestyle (DASHED);
- drawline (560.,120.,560.,200.);
- setcolor (BLUE);
- drawtext (190.,300.,"drawarc",150.);
- drawarc (190.,300.,50.,0.,270.);
- drawarc (300.,300.,50.,0.,-180.);
- fillarc (410.,300.,50.,90., -90.);
- fillarc (520.,300.,50.,0.,360.);
- setcolor (BLACK);
- drawtext (520.,300.,"fillarc",150.);
- setcolor (BLUE);
- fillarc (630.,300.,50.,90.,180.);
- fillarc (740.,300.,50.,90.,270.);
- fillarc (850.,300.,50.,90.,30.);
- setcolor (RED);
- fillpoly(polypts,3);
- fillpoly(polypts2,4);
- setcolor (BLACK);
- drawtext (500.,450.,"fillpoly",150.);
- setcolor (DARKGREEN);
- drawtext (500.,610.,"drawrect",150.);
- drawrect (350.,550.,650.,670.);
-
- setcolor (BLACK);
- setfontsize (8);
- drawtext (100.,770.,"8 Point Text",800.);
- setfontsize (12);
- drawtext (400.,770.,"12 Point Text",800.);
- setfontsize (15);
- drawtext (700.,770.,"18 Point Text",800.);
- setfontsize (24);
- drawtext (300.,830.,"24 Point Text",800.);
- setfontsize (32);
- drawtext (700.,830.,"32 Point Text",800.);
- setfontsize (10);
-
- setlinestyle (SOLID);
- drawtext (200.,900.,"Thin line (width 1)",800.);
- setlinewidth (1);
- drawline (100.,920.,300.,920.);
- drawtext (500.,900.,"Width 3 Line",800.);
- setlinewidth (3);
- drawline (400.,920.,600.,920.);
- drawtext (800.,900.,"Width 6 Line",800.);
- setlinewidth (6);
- drawline (700.,920.,900.,920.);
- */
 }
 
 void button_press(float x, float y, int flags) {
     printf("User clicked a button at coordinates (%f, %f)\n", x, y);
 }
 
-
 void proceed_button_func(void (*drawscreen_ptr) (void)) {
-    while (!target_found) {
-    // Run the algorithm
     run_lee_moore_algo();
     drawscreen();
-    delay();
+}
+
+void proceed_fast_button_func(void (*drawscreen_ptr) (void)) {
+    STATE state = cur_state;
+    while (state == cur_state) {
+        run_lee_moore_algo();
+        drawscreen();
     }
 }
 
@@ -530,11 +414,18 @@ bool is_valid_coordinates(int col, int row) {
     return (col >= 0 && row >=0 && col < num_columns && row < num_rows);
 }
 
-bool is_valid_neighbor(int col, int row) {
-    return (is_valid_coordinates(col, row) &&
-        !grid[col][row].is_obstruction &&
-        grid[col][row].value == -1 &&
-        !grid[col][row].is_wire);
+bool is_valid_neighbor(int col, int row, bool trace_back) {
+    if (trace_back) {
+        return (is_valid_coordinates(col, row) &&
+            !grid[col][row].is_obstruction &&
+            grid[col][row].value != -1 &&
+            !grid[col][row].is_wire);
+    } else {
+        return (is_valid_coordinates(col, row) &&
+            !grid[col][row].is_obstruction &&
+            grid[col][row].value == -1 &&
+            !grid[col][row].is_wire);
+    }
 }
 
 LOCATION *make_location(int col, int row) {
@@ -547,7 +438,7 @@ LOCATION *make_location(int col, int row) {
     return g;
 }
 
-LOCATION *find_all_neighbors(int col, int row) {
+LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
     // Neighbors is deemed as the one on top, below, left, and right of (col, row)
     LOCATION *neighbors = NULL;
     int c, r;
@@ -559,7 +450,7 @@ LOCATION *find_all_neighbors(int col, int row) {
     // Top
     c = col;
     r = row - 1;
-    if (is_valid_neighbor(c, r)) {
+    if (is_valid_neighbor(c, r, trace_back)) {
         LOCATION *g = make_location(c, r);
         neighbors = g;
 #ifdef DEBUG
@@ -570,7 +461,7 @@ LOCATION *find_all_neighbors(int col, int row) {
     // Bottom
     c = col;
     r = row + 1;
-    if (is_valid_neighbor(c, r)) {
+    if (is_valid_neighbor(c, r, trace_back)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -581,7 +472,7 @@ LOCATION *find_all_neighbors(int col, int row) {
     // Left
     c = col - 1;
     r = row;
-    if (is_valid_neighbor(c, r)) {
+    if (is_valid_neighbor(c, r, trace_back)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -592,7 +483,7 @@ LOCATION *find_all_neighbors(int col, int row) {
     // Right
     c = col + 1;
     r = row;
-    if (is_valid_neighbor(c, r)) {
+    if (is_valid_neighbor(c, r, trace_back)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -621,8 +512,9 @@ void run_lee_moore_algo() {
         LOCATION *g = make_location(cur_src_col, cur_src_row);
         expansion_list = g;
         printf("Labeled source (%d, %d) as first step!\n", cur_src_col, cur_src_row);
+        cur_state = EXPANSION;
         return;
-    } else if (expansion_list != NULL) {
+    } else if (expansion_list != NULL && !target_found) {
         int col, row;
         // Find the cell in the expansion list with the smallest value
         LOCATION *g = find_smallest_value();
@@ -631,10 +523,12 @@ void run_lee_moore_algo() {
                 target_found = true;
                 printf("Found the target (%d, %d)\n", g->col, g->row);
                 // g is the target, done!
+                cur_target_col = g->col;
+                cur_target_row = g->row;
                 return;
             }
 
-            LOCATION *neighbors = find_all_neighbors(g->col, g->row);
+            LOCATION *neighbors = find_all_neighbors(g->col, g->row, false);
             LOCATION *cur = NULL;
             while ((cur = pop_from_list(&neighbors)) != NULL) {
                 col = cur->col;
@@ -650,6 +544,9 @@ void run_lee_moore_algo() {
                     add_to_list(&expansion_list, cur);
                 }
             }
+
+            // Don't need the LOCATION anymore. Cleanup
+            free(g);
         } else {
             printf("ERROR: cannot find smallest value...\n");
             return;
@@ -657,10 +554,61 @@ void run_lee_moore_algo() {
     } else if (target_found == false) {
         // Loop has terminated (i.e. couldn't hit a target), then fail
         printf("WARNING: Failed to route src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+        cur_state = IDLE;
         return;
     } else {
-        // Traceback begins
-        printf("Beginning traceback of src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+        // Traceback
+        printf("Traceback of source (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+
+        cur_state = TRACEBACK;
+
+        // Start at target
+        if (cur_trace_col == -1 || cur_trace_row == -1) {
+            cur_trace_col = cur_target_col;
+            cur_trace_row = cur_target_row;
+
+            grid[cur_trace_col][cur_trace_row].is_wire = true;
+            return;
+        }
+
+        if (cur_trace_col == cur_src_col && cur_trace_row == cur_src_row) {
+            printf("Successfully finished traceback of (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+            grid[cur_trace_col][cur_trace_row].is_wire = true;
+
+            // TODO: Need to reset stats?
+            cur_state = IDLE;
+            return;
+        }
+
+        int cur_value = grid[cur_trace_col][cur_trace_row].value;
+
+        LOCATION *neighbors = find_all_neighbors(cur_trace_col, cur_trace_row, true);
+        LOCATION *cur = NULL;
+        int col = -1;
+        int row = -1;
+
+        while ((cur = pop_from_list(&neighbors)) != NULL) {
+            col = cur->col;
+            row = cur->row;
+
+            if (grid[col][row].value == cur_value - 1) {
+#ifdef DEBUG
+                printf("Found next cell to wire: (%d, %d)\n", col, row);
+#endif
+                break;
+            }
+        }
+
+        if (col == -1 || row == -1) {
+            printf("ERROR: Could not find the next cell to route!\n");
+            cur_state = IDLE;
+            return;
+        }
+
+        grid[col][row].is_wire = true;
+        grid[col][row].wire_num = grid[cur_src_col][cur_src_row].wire_num;
+        cur_trace_col = col;
+        cur_trace_row = row;
     }
 }
 
