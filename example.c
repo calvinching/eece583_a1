@@ -34,7 +34,7 @@ typedef struct CELL {
     bool is_obstruction;    // true if this cell is an obstruction for wiring
     bool is_source;         // true if it's a source
     bool is_sink;           // true if it's a sink
-    bool is_routed;         // true if we've tried routing this cell
+    bool is_routed;         // true if we've tried routing this net
     bool is_wire;           // true if the cell is a wire
     int wire_num;           // wire number (i.e. the net number)
     int value;              // value of the lee-moore algo
@@ -428,6 +428,34 @@ bool is_valid_neighbor(int col, int row, bool trace_back) {
     }
 }
 
+void reset_grid() {
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            grid[col][row].value = -1;
+        }
+    }
+    cur_src_col = -1;
+    cur_src_row = -1;
+    cur_target_col = -1;
+    cur_target_row = -1;
+    cur_trace_col = -1;
+    cur_trace_row = -1;
+    cur_wire_num = -1;
+
+    target_found = false;
+
+    if (expansion_list != NULL) {
+        LOCATION *cur = expansion_list;
+        while (cur != NULL) {
+            LOCATION *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+
+        expansion_list = NULL;
+    }
+}
+
 LOCATION *make_location(int col, int row) {
     LOCATION *g = (LOCATION *)malloc(sizeof(LOCATION));
     g->col = col;
@@ -576,6 +604,7 @@ void run_lee_moore_algo() {
             grid[cur_trace_col][cur_trace_row].is_wire = true;
 
             // TODO: Need to reset stats?
+            reset_grid();
             cur_state = IDLE;
             return;
         }
