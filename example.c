@@ -4,7 +4,7 @@
 #include "graphics.h"
 #include "common.h"
 
-#define DEBUG
+//#define DEBUG
 #define SUCCESS 0
 #define ERROR -1
 
@@ -61,8 +61,12 @@ void add_to_list(LOCATION **head, LOCATION * g);
 LOCATION *pop_from_list(LOCATION **head);
 void remove_from_list(LOCATION **head, LOCATION *remove);
 
+#define MAX_NUM_RETRIES 10
+
 LOCATION *expansion_list = NULL;
 bool sink_found = false;
+bool multiple_sink = false;
+int num_retries = 0;
 
 typedef enum STATE {
     IDLE,
@@ -173,11 +177,11 @@ void draw_grid() {
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 if (grid[col][row].is_wire && !(grid[col][row].is_source || grid[col][row].is_sink)) {
-                    sprintf(text, "%d (w)", grid[col][row].wire_num);
+                    sprintf(text, "%d_w", grid[col][row].wire_num);
                 } else if (grid[col][row].value != -1) {
                     sprintf(text, "%d", grid[col][row].value);
                 } else {
-                    sprintf(text, "%d (%s)", grid[col][row].wire_num, grid[col][row].is_source ? "src" : "snk");
+                    sprintf(text, "%d_%s", grid[col][row].wire_num, grid[col][row].is_source ? "sc" : "sk");
                 }
                 drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
             } else if (grid[col][row].value != -1) {
@@ -188,9 +192,11 @@ void draw_grid() {
                 drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
             } else {
                 setcolor(BLACK);
-                sprintf(text, "(%d, %d)", col, row);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
+#ifdef DEBUG
+                sprintf(text, "(%d, %d)", col, row);
                 drawtext(grid[col][row].text_x, grid[col][row].text_y, text, 150.);
+#endif
             }
         }
     }
@@ -350,6 +356,18 @@ bool find_new_source() {
     return found;
 }
 
+void print_cell(int col, int row) {
+    printf("(%d, %d): is_obstruction: %s, is_source: %s, is_sink: %s, is_routed: %s, is_wire: %s, wire_num: %d, value: %d\n",
+        col, row,
+        grid[col][row].is_obstruction ? "true" : "false",
+        grid[col][row].is_source ? "true" : "false",
+        grid[col][row].is_sink ? "true" : "false",
+        grid[col][row].is_routed ? "true" : "false",
+        grid[col][row].is_wire ? "true" : "false",
+        grid[col][row].wire_num,
+        grid[col][row].value);
+}
+
 #define ABS(x) (((x) < 0) ? -(x) : (x))
 
 bool find_new_source_for_sink(int sink_col, int sink_row) {
@@ -364,7 +382,10 @@ bool find_new_source_for_sink(int sink_col, int sink_row) {
     if (wire_num != -1) {
         for (int col = 0; col < num_columns; col++) {
             for (int row = 0; row < num_rows; row++) {
-                if (grid[col][row].wire_num == wire_num && grid[col][row].is_wire && !(grid[col][row].is_sink || grid[col][row].is_source)) {
+                if (grid[col][row].wire_num == wire_num &&
+                    grid[col][row].is_wire &&
+                    col != cur_src_col && row != cur_src_row &&
+                    !(grid[col][row].is_sink || grid[col][row].is_source)) {
                     // Found the correct wire. Now see if it's close to the sink
                     int diff = ABS(col - sink_col) + ABS(row - sink_row);
                     if (diff < smallest_diff) {
@@ -392,10 +413,15 @@ bool find_new_sink(int src_col, int src_row) {
     bool found = false;
     for (int col = 0; col < num_columns; col++) {
         for (int row = 0; row < num_rows; row++) {
+#ifdef DEBUG
+            if (grid[col][row].is_sink) {
+                print_cell(col, row);
+            }
+#endif
             // Find a sink for the source (src_col, src_row)
-            if (grid[src_col][src_row].is_source &&
-                grid[col][row].is_sink &&
+            if (grid[col][row].is_sink &&
                 !grid[col][row].is_routed &&
+                !grid[col][row].is_wire &&
                 grid[src_col][src_row].wire_num == grid[col][row].wire_num) {
                 cur_sink_col = col;
                 cur_sink_row = row;
@@ -404,11 +430,13 @@ bool find_new_sink(int src_col, int src_row) {
             }
         }
         if (found) {
+            printf("New current sink: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
             break;
         }
     }
 
-    printf("New current sink: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+    printf("Found new sink? %d\n", found);
+
     return found;
 }
 
@@ -521,6 +549,8 @@ void reset_current() {
     cur_state = IDLE;
 
     sink_found = false;
+    multiple_sink = false;
+    num_retries = 0;
     clear_expansion_list();
 }
 
@@ -667,7 +697,30 @@ void run_lee_moore_algo() {
     } else if (sink_found == false) {
         // Loop has terminated (i.e. couldn't hit a sink), then fail
         printf("WARNING: Failed to route src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
-        cur_state = IDLE;
+        if (num_retries < MAX_NUM_RETRIES) {
+            if (multiple_sink) {
+                printf("Number of retries: %d\n", num_retries);
+                // Try another "source"
+                reset_grid();
+                sink_found = false;
+                clear_expansion_list();
+                cur_state = IDLE;
+                cur_trace_col = -1;
+                cur_trace_row = -1;
+                num_retries++;
+
+                // Need to find a new cur_src_col and new cur_src_row to route to the new sink
+                find_new_source_for_sink(cur_sink_col, cur_sink_row);
+            } else {
+                // TODO: rip-up
+            }
+        } else {
+            printf("ERROR: Reached number of retries! Giving up\n");
+            num_retries = 0;
+            cur_state = IDLE;
+            reset_grid();
+            reset_current();
+        }
         return;
     } else {
         // Traceback
@@ -691,6 +744,7 @@ void run_lee_moore_algo() {
 
             // Check to see if there are more sinks for this net
             if (find_new_sink(cur_src_col, cur_src_row)) {
+                multiple_sink = true;
                 // More work to do! We need to route to the new sink
                 printf("There is more work to be done! Found new sink for this source\n");
                 reset_grid();
@@ -703,6 +757,7 @@ void run_lee_moore_algo() {
                 // Need to find a new cur_src_col and new cur_src_row to route to the new sink
                 find_new_source_for_sink(cur_sink_col, cur_sink_row);
             } else {
+                printf("We are done! Finished routing all sinks for source (%d, %d)\n", cur_src_col, cur_src_row);
                 // We are done, reset counters and states
                 reset_grid();
                 reset_current();
