@@ -44,8 +44,8 @@ CELL **grid;
 
 int cur_src_col = -1;
 int cur_src_row = -1;
-int cur_target_col = -1;
-int cur_target_row = -1;
+int cur_sink_col = -1;
+int cur_sink_row = -1;
 int cur_trace_col = -1;
 int cur_trace_row = -1;
 int cur_wire_num = -1;
@@ -62,7 +62,7 @@ LOCATION *pop_from_list(LOCATION **head);
 void remove_from_list(LOCATION **head, LOCATION *remove);
 
 LOCATION *expansion_list = NULL;
-bool target_found = false;
+bool sink_found = false;
 
 typedef enum STATE {
     IDLE,
@@ -329,8 +329,8 @@ void proceed_fast_button_func(void (*drawscreen_ptr) (void)) {
 
 bool find_new_source() {
     bool found = false;
-    for (int col = 1; col < num_columns; col++) {
-        for (int row = 1; row < num_rows; row++) {
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
             // Find a new source to route
             if (grid[col][row].is_source && !grid[col][row].is_routed) {
                 cur_src_col = col;
@@ -347,6 +347,68 @@ bool find_new_source() {
     }
 
     printf("New current source: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+    return found;
+}
+
+#define ABS(x) (((x) < 0) ? -(x) : (x))
+
+bool find_new_source_for_sink(int sink_col, int sink_row) {
+    bool found = false;
+
+    // The idea is to find the part of the wire that is closest to the sink
+    int wire_num = grid[sink_col][sink_row].wire_num;
+    int smallest_diff = INT_MAX;
+    int closest_col = -1;
+    int closest_row = -1;
+
+    if (wire_num != -1) {
+        for (int col = 0; col < num_columns; col++) {
+            for (int row = 0; row < num_rows; row++) {
+                if (grid[col][row].wire_num == wire_num && grid[col][row].is_wire && !(grid[col][row].is_sink || grid[col][row].is_source)) {
+                    // Found the correct wire. Now see if it's close to the sink
+                    int diff = ABS(col - sink_col) + ABS(row - sink_row);
+                    if (diff < smallest_diff) {
+                        smallest_diff = diff;
+                        closest_col = col;
+                        closest_row = row;
+                    }
+                }
+            }
+        }
+    }
+
+    if (closest_col != -1 && closest_row != -1) {
+        cur_src_col = closest_col;
+        cur_src_row = closest_row;
+        found = true;
+
+        printf("Found (%d, %d) for sink (%d, %d)\n", cur_src_col, cur_src_row, sink_col, sink_row);
+    }
+
+    return found;
+}
+
+bool find_new_sink(int src_col, int src_row) {
+    bool found = false;
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            // Find a sink for the source (src_col, src_row)
+            if (grid[src_col][src_row].is_source &&
+                grid[col][row].is_sink &&
+                !grid[col][row].is_routed &&
+                grid[src_col][src_row].wire_num == grid[col][row].wire_num) {
+                cur_sink_col = col;
+                cur_sink_row = row;
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    printf("New current sink: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
     return found;
 }
 
@@ -414,36 +476,28 @@ bool is_valid_coordinates(int col, int row) {
     return (col >= 0 && row >=0 && col < num_columns && row < num_rows);
 }
 
-bool is_valid_neighbor(int col, int row, bool trace_back) {
+bool is_valid_neighbor(int col, int row, bool trace_back, int wire_num) {
+    bool valid = false;
     if (trace_back) {
-        return (is_valid_coordinates(col, row) &&
-            !grid[col][row].is_obstruction &&
-            grid[col][row].value != -1 &&
-            !grid[col][row].is_wire);
+        valid = (is_valid_coordinates(col, row) && !grid[col][row].is_obstruction && grid[col][row].value != -1);
+        if (valid && grid[col][row].is_wire && wire_num != -1) {
+            // Only way it's valid is if the wire is the same wire_num
+            if (!(grid[col][row].wire_num == wire_num)) {
+                valid = false;
+            }
+        }
     } else {
-        return (is_valid_coordinates(col, row) &&
-            !grid[col][row].is_obstruction &&
-            grid[col][row].value == -1 &&
-            !grid[col][row].is_wire);
-    }
-}
-
-void reset_grid() {
-    for (int col = 0; col < num_columns; col++) {
-        for (int row = 0; row < num_rows; row++) {
-            grid[col][row].value = -1;
+        valid = (is_valid_coordinates(col, row) && !grid[col][row].is_obstruction && grid[col][row].value == -1 && !grid[col][row].is_wire);
+        if (valid && (grid[col][row].is_sink || grid[col][row].is_source)) {
+            if (!(grid[col][row].wire_num == wire_num)) {
+                valid = false;
+            }
         }
     }
-    cur_src_col = -1;
-    cur_src_row = -1;
-    cur_target_col = -1;
-    cur_target_row = -1;
-    cur_trace_col = -1;
-    cur_trace_row = -1;
-    cur_wire_num = -1;
+    return valid;
+}
 
-    target_found = false;
-
+void clear_expansion_list() {
     if (expansion_list != NULL) {
         LOCATION *cur = expansion_list;
         while (cur != NULL) {
@@ -453,6 +507,28 @@ void reset_grid() {
         }
 
         expansion_list = NULL;
+    }
+}
+
+void reset_current() {
+    cur_src_col = -1;
+    cur_src_row = -1;
+    cur_sink_col = -1;
+    cur_sink_row = -1;
+    cur_trace_col = -1;
+    cur_trace_row = -1;
+    cur_wire_num = -1;
+    cur_state = IDLE;
+
+    sink_found = false;
+    clear_expansion_list();
+}
+
+void reset_grid() {
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            grid[col][row].value = -1;
+        }
     }
 }
 
@@ -466,7 +542,7 @@ LOCATION *make_location(int col, int row) {
     return g;
 }
 
-LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
+LOCATION *find_all_neighbors(int col, int row, bool trace_back, int wire_num) {
     // Neighbors is deemed as the one on top, below, left, and right of (col, row)
     LOCATION *neighbors = NULL;
     int c, r;
@@ -478,7 +554,7 @@ LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
     // Top
     c = col;
     r = row - 1;
-    if (is_valid_neighbor(c, r, trace_back)) {
+    if (is_valid_neighbor(c, r, trace_back, wire_num)) {
         LOCATION *g = make_location(c, r);
         neighbors = g;
 #ifdef DEBUG
@@ -489,7 +565,7 @@ LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
     // Bottom
     c = col;
     r = row + 1;
-    if (is_valid_neighbor(c, r, trace_back)) {
+    if (is_valid_neighbor(c, r, trace_back, wire_num)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -500,7 +576,7 @@ LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
     // Left
     c = col - 1;
     r = row;
-    if (is_valid_neighbor(c, r, trace_back)) {
+    if (is_valid_neighbor(c, r, trace_back, wire_num)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -511,7 +587,7 @@ LOCATION *find_all_neighbors(int col, int row, bool trace_back) {
     // Right
     c = col + 1;
     r = row;
-    if (is_valid_neighbor(c, r, trace_back)) {
+    if (is_valid_neighbor(c, r, trace_back, wire_num)) {
         LOCATION *g = make_location(c, r);
         add_to_list(&neighbors, g);
 #ifdef DEBUG
@@ -532,6 +608,10 @@ void run_lee_moore_algo() {
             printf("Attempted all sources!\n");
             return;
         }
+
+        if (!find_new_sink(cur_src_col, cur_src_row)) {
+            printf("ERROR: Cannot find sink for (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+        }
     }
 
     if (grid[cur_src_col][cur_src_row].value == -1) {
@@ -542,21 +622,20 @@ void run_lee_moore_algo() {
         printf("Labeled source (%d, %d) as first step!\n", cur_src_col, cur_src_row);
         cur_state = EXPANSION;
         return;
-    } else if (expansion_list != NULL && !target_found) {
+    } else if (expansion_list != NULL && !sink_found) {
         int col, row;
         // Find the cell in the expansion list with the smallest value
         LOCATION *g = find_smallest_value();
         if (g != NULL) {
-            if (grid[g->col][g->row].is_sink && grid[g->col][g->row].wire_num == grid[cur_src_col][cur_src_row].wire_num) {
-                target_found = true;
-                printf("Found the target (%d, %d)\n", g->col, g->row);
-                // g is the target, done!
-                cur_target_col = g->col;
-                cur_target_row = g->row;
+            // Check to see if g is the sink. If so, then we're done
+            if (g->col == cur_sink_col && g->row == cur_sink_row) {
+                sink_found = true;
+                printf("Found the sink (%d, %d)\n", g->col, g->row);
+                free(g);
                 return;
             }
 
-            LOCATION *neighbors = find_all_neighbors(g->col, g->row, false);
+            LOCATION *neighbors = find_all_neighbors(g->col, g->row, false, cur_wire_num);
             LOCATION *cur = NULL;
             while ((cur = pop_from_list(&neighbors)) != NULL) {
                 col = cur->col;
@@ -566,7 +645,13 @@ void run_lee_moore_algo() {
                     // label it with the label of g + 1
                     grid[col][row].value = grid[g->col][g->row].value + 1;
 
-                    printf("expansion_list: %p\n", expansion_list);
+                    // Check to see if we have expanded to sink. If so, then we're done
+                    if (col == cur_sink_col && row == cur_sink_row) {
+                        sink_found = true;
+                        printf("Found the sink (%d, %d)\n", g->col, g->row);
+                        free(g);
+                        return;
+                    }
 
                     // add neighbor to expansion list
                     add_to_list(&expansion_list, cur);
@@ -579,8 +664,8 @@ void run_lee_moore_algo() {
             printf("ERROR: cannot find smallest value...\n");
             return;
         }
-    } else if (target_found == false) {
-        // Loop has terminated (i.e. couldn't hit a target), then fail
+    } else if (sink_found == false) {
+        // Loop has terminated (i.e. couldn't hit a sink), then fail
         printf("WARNING: Failed to route src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
         cur_state = IDLE;
         return;
@@ -590,12 +675,13 @@ void run_lee_moore_algo() {
 
         cur_state = TRACEBACK;
 
-        // Start at target
+        // Start at sink
         if (cur_trace_col == -1 || cur_trace_row == -1) {
-            cur_trace_col = cur_target_col;
-            cur_trace_row = cur_target_row;
+            cur_trace_col = cur_sink_col;
+            cur_trace_row = cur_sink_row;
 
             grid[cur_trace_col][cur_trace_row].is_wire = true;
+            grid[cur_trace_col][cur_trace_row].is_routed = true;
             return;
         }
 
@@ -603,15 +689,30 @@ void run_lee_moore_algo() {
             printf("Successfully finished traceback of (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
             grid[cur_trace_col][cur_trace_row].is_wire = true;
 
-            // TODO: Need to reset stats?
-            reset_grid();
-            cur_state = IDLE;
+            // Check to see if there are more sinks for this net
+            if (find_new_sink(cur_src_col, cur_src_row)) {
+                // More work to do! We need to route to the new sink
+                printf("There is more work to be done! Found new sink for this source\n");
+                reset_grid();
+                sink_found = false;
+                clear_expansion_list();
+                cur_state = IDLE;
+                cur_trace_col = -1;
+                cur_trace_row = -1;
+
+                // Need to find a new cur_src_col and new cur_src_row to route to the new sink
+                find_new_source_for_sink(cur_sink_col, cur_sink_row);
+            } else {
+                // We are done, reset counters and states
+                reset_grid();
+                reset_current();
+            }
             return;
         }
 
         int cur_value = grid[cur_trace_col][cur_trace_row].value;
 
-        LOCATION *neighbors = find_all_neighbors(cur_trace_col, cur_trace_row, true);
+        LOCATION *neighbors = find_all_neighbors(cur_trace_col, cur_trace_row, true, cur_wire_num);
         LOCATION *cur = NULL;
         int col = -1;
         int row = -1;
@@ -638,6 +739,7 @@ void run_lee_moore_algo() {
         grid[col][row].wire_num = grid[cur_src_col][cur_src_row].wire_num;
         cur_trace_col = col;
         cur_trace_row = row;
+        printf("Current trace (%d, %d)\n", cur_trace_col, cur_trace_row);
     }
 }
 
