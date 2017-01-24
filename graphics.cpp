@@ -354,7 +354,7 @@ static void drawmenu(void);
 static int win32_line_styles[2] = { PS_SOLID, PS_DASH };
 
 static COLORREF win32_colors[NUM_COLOR] = { RGB(255, 255, 255),
-RGB(0, 0, 0), RGB(128, 128, 128), RGB(192, 192, 192), RGB(0, 0, 255),
+RGB(0, 0, 0), RGB(0, 0, 255), RGB(128, 128, 128), RGB(192, 192, 192),
 RGB(0, 255, 0), RGB(255, 255, 0), RGB(0, 255, 255), RGB(255, 0, 0), RGB(0, 128, 0),
 RGB(255, 0, 255) };
 
@@ -470,8 +470,8 @@ redraw_screen();
 static void 
 force_setcolor (int cindex) 
 {
-	static char *ps_cnames[NUM_COLOR] = {"white", "black", "grey55", "grey75",
-		"blue", "green", "yellow", "cyan", "red", "darkgreen", "magenta"};
+	static char *ps_cnames[NUM_COLOR] = {"white", "black", "blue", "grey55", "grey75",
+		"green", "yellow", "cyan", "red", "darkgreen", "magenta"};
 
 	int linestyle;
 
@@ -904,7 +904,7 @@ init_graphics (char *window_name, int cindex, void (*cleanup)(void))
 	XTextProperty windowName;
 	
 	/* X Windows' names for my colours. */
-	char *cnames[NUM_COLOR] = {"white", "black", "grey55", "grey75", "blue", 
+	char *cnames[NUM_COLOR] = {"white", "black", "grey55", "grey75", "blue",
 		"green", "yellow", "cyan", "red", "RGBi:0.0/0.5/0.0", "magenta" };
 	
 	XColor exact_def;
@@ -1289,10 +1289,10 @@ event_loop (void (*act_on_button)(float x, float y, int flags),
 					button[bnum].ispressed = 0;
 					drawbut(bnum);
 					if (button[bnum].fcn == proceed) {
-						turn_on_off(OFF);
-						flushinput ();
-						return;  /* Rather clumsy way of returning *
-						* control to the simulator       */
+						//turn_on_off(OFF);
+						//flushinput ();
+						//return;  /* Rather clumsy way of returning *
+						//* control to the simulator       */
 					}
 				}
 			}
@@ -2361,7 +2361,7 @@ postscript (void (*drawscreen) (void))
 static void 
 proceed (void (*drawscreen) (void)) 
 {
-	ProceedPressed = TRUE;
+//	ProceedPressed = TRUE;
 }
 
 

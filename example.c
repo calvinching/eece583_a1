@@ -15,12 +15,16 @@ void proceed_fast_button_func(void (*drawscreen_ptr) (void));
 void mouse_move (float x, float y);
 void key_press (int i);
 void init_grid();
-void delay();
 int parse_file(char *file);
 void run_lee_moore_algo();
 
+bool done = false;
 int num_rows = 0;
 int num_columns = 0;
+int num_sources = 0;
+int num_sinks = 0;
+int num_successful_sinks = 0;
+int num_failed_sinks = 0;
 
 typedef struct CELL {
     float x1;       // x-coordinate of the cell's top left corner
@@ -60,13 +64,17 @@ typedef struct LOCATION {
 void add_to_list(LOCATION **head, LOCATION * g);
 LOCATION *pop_from_list(LOCATION **head);
 void remove_from_list(LOCATION **head, LOCATION *remove);
+LOCATION *make_location(int col, int row);
+void find_all_sources();
 
-#define MAX_NUM_RETRIES 10
+#define MAX_NUM_RETRIES 25
 
 LOCATION *expansion_list = NULL;
 bool sink_found = false;
 bool multiple_sink = false;
 int num_retries = 0;
+LOCATION *all_sources = NULL;
+LOCATION *failed_sources_for_multisink = NULL;
 
 typedef enum STATE {
     IDLE,
@@ -76,6 +84,19 @@ typedef enum STATE {
 
 STATE cur_state;
 
+
+void delay(void) {
+
+    int i, j, k, sum;
+
+    sum = 0;
+    for (i=0;i<100;i++)
+        for (j=0;j<i;j++)
+            for (k=0;k<30;k++)
+                sum = sum + i+j-k;
+}
+
+
 void clean_up(void) {
     // Clean up dynamically allocated grid
     for (int col = 0; col < num_columns; col++) {
@@ -83,18 +104,6 @@ void clean_up(void) {
     }
     free(grid);
 }
-
-void delay(void) {
-
-    int i, j, k, sum;
-
-    sum = 0;
-    for (i=0;i<100;i++) 
-        for (j=0;j<i;j++)
-            for (k=0;k<30;k++) 
-                sum = sum + i+j-k; 
-}
-
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -112,8 +121,10 @@ int main(int argc, char *argv[]) {
     cur_state = IDLE;
     parse_file(file);
 
-    create_button("Window", "Proceed", proceed_button_func);
-    create_button("Window", "Proceed Fast", proceed_fast_button_func);
+    find_all_sources();
+
+    create_button("Window", "Go 1 Step", proceed_button_func);
+    create_button("Window", "Go 1 State", proceed_fast_button_func);
     drawscreen();
     event_loop(button_press, mouse_move, key_press, drawscreen);
     return 0;
@@ -172,12 +183,12 @@ void draw_grid() {
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
             } else if (grid[col][row].wire_num != -1) {
                 // Draw source and sinks
-                setcolor(GREEN + grid[col][row].wire_num);
+                setcolor(DARKGREY + grid[col][row].wire_num);
                 fillrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 setcolor(BLACK);
                 drawrect(grid[col][row].x1, grid[col][row].y1, grid[col][row].x2, grid[col][row].y2);
                 if (grid[col][row].is_wire && !(grid[col][row].is_source || grid[col][row].is_sink)) {
-                    sprintf(text, "%d_w", grid[col][row].wire_num);
+                    sprintf(text, "w");
                 } else if (grid[col][row].value != -1) {
                     sprintf(text, "%d", grid[col][row].value);
                 } else {
@@ -283,17 +294,21 @@ int parse_file(char *file) {
                                     grid[col][row].is_source = true;
                                     grid[col][row].wire_num = cur_wire;
                                     printf("(%d, %d) is a source\n", col, row);
+                                    num_sources++;
                                     idx++;
                                 } else {
                                     grid[col][row].is_sink = true;
                                     grid[col][row].wire_num = cur_wire;
                                     printf("(%d, %d) is a sink\n", col, row);
+                                    num_sinks++;
                                 }
 
                                 num_pins--;
                             }
+
                             cur_wire++;
                         }
+
                     }
                     break;
                 }
@@ -308,6 +323,8 @@ int parse_file(char *file) {
     } else {
         printf("Invalid file!");
     }
+
+    printf("There are %d sources\n", num_sources);
     return ret;
 }
 
@@ -321,19 +338,41 @@ void button_press(float x, float y, int flags) {
 }
 
 void proceed_button_func(void (*drawscreen_ptr) (void)) {
-    run_lee_moore_algo();
-    drawscreen();
+    if (!done) {
+        run_lee_moore_algo();
+        drawscreen();
+    } else {
+        printf("Nothing else to do!\n");
+    }
 }
 
 void proceed_fast_button_func(void (*drawscreen_ptr) (void)) {
     STATE state = cur_state;
-    while (state == cur_state) {
+    while (state == cur_state && !done) {
         run_lee_moore_algo();
         drawscreen();
+        delay();
+    }
+
+    if (done) 
+        printf("Nothing else to do!\n");
+}
+
+
+void find_all_sources() {
+    printf("Finding all sources\n");
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            if (grid[col][row].is_source) {
+                LOCATION *loc = make_location(col, row);
+                add_to_list(&all_sources, loc);
+            }
+        }
     }
 }
 
 bool find_new_source() {
+    /*
     bool found = false;
     for (int col = 0; col < num_columns; col++) {
         for (int row = 0; row < num_rows; row++) {
@@ -351,8 +390,27 @@ bool find_new_source() {
             break;
         }
     }
-
-    printf("New current source: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+    */
+    bool found = false;
+    LOCATION *loc = pop_from_list(&all_sources);
+    if (loc != NULL) {
+        int col = loc->col;
+        int row = loc->row;
+        if (!grid[col][row].is_routed) {
+            cur_src_col = col;
+            cur_src_row = row;
+            cur_wire_num = grid[cur_src_col][cur_src_row].wire_num;
+            grid[cur_src_col][cur_src_row].is_routed = true;
+            found = true;
+            printf("New current source: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+        } else {
+            printf("WARNING: Cannot find new source! (%d, %d) already routed!?\n", col, row);
+        }
+        free(loc);
+    } else {
+        done = true;
+        printf("No more sources to route!\n");
+    }
     return found;
 }
 
@@ -370,6 +428,20 @@ void print_cell(int col, int row) {
 
 #define ABS(x) (((x) < 0) ? -(x) : (x))
 
+bool list_contains(LOCATION *list, int col, int row) {
+    bool contains = false;
+    LOCATION *cur = list;
+    while (cur != NULL) {
+        if (cur->col == col && cur->row == row) {
+            printf("List contains: (%d, %d)\n", col, row);
+            contains = true;
+            break;
+        }
+        cur = cur->next;
+    }
+    return contains;
+}
+
 bool find_new_source_for_sink(int sink_col, int sink_row) {
     bool found = false;
 
@@ -384,8 +456,9 @@ bool find_new_source_for_sink(int sink_col, int sink_row) {
             for (int row = 0; row < num_rows; row++) {
                 if (grid[col][row].wire_num == wire_num &&
                     grid[col][row].is_wire &&
-                    col != cur_src_col && row != cur_src_row &&
+                    !(list_contains(failed_sources_for_multisink, col, row)) &&
                     !(grid[col][row].is_sink || grid[col][row].is_source)) {
+
                     // Found the correct wire. Now see if it's close to the sink
                     int diff = ABS(col - sink_col) + ABS(row - sink_row);
                     if (diff < smallest_diff) {
@@ -404,6 +477,8 @@ bool find_new_source_for_sink(int sink_col, int sink_row) {
         found = true;
 
         printf("Found (%d, %d) for sink (%d, %d)\n", cur_src_col, cur_src_row, sink_col, sink_row);
+    } else {
+        printf("Couldn't find anything...\n");
     }
 
     return found;
@@ -430,7 +505,7 @@ bool find_new_sink(int src_col, int src_row) {
             }
         }
         if (found) {
-            printf("New current sink: (%d, %d) [%d]\n", cur_src_col, cur_src_row, cur_wire_num);
+            printf("New current sink: (%d, %d) [%d]\n", cur_sink_col, cur_sink_row, cur_wire_num);
             break;
         }
     }
@@ -525,6 +600,20 @@ bool is_valid_neighbor(int col, int row, bool trace_back, int wire_num) {
     return valid;
 }
 
+
+void clear_failed_list() {
+    if (failed_sources_for_multisink != NULL) {
+        LOCATION *cur = failed_sources_for_multisink;
+        while (cur != NULL) {
+            LOCATION *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+
+        failed_sources_for_multisink = NULL;
+    }
+}
+
 void clear_expansion_list() {
     if (expansion_list != NULL) {
         LOCATION *cur = expansion_list;
@@ -552,6 +641,36 @@ void reset_current() {
     multiple_sink = false;
     num_retries = 0;
     clear_expansion_list();
+    clear_failed_list();
+
+}
+
+void reset_all() {
+    for (int col = 0; col < num_columns; col++) {
+        for (int row = 0; row < num_rows; row++) {
+            grid[col][row].is_routed = false;
+            grid[col][row].is_wire = false;
+            if (!(grid[col][row].is_source || grid[col][row].is_sink)) {
+                grid[col][row].wire_num = -1;
+            }
+            grid[col][row].value = -1;
+        }
+    }
+
+    cur_src_col = -1;
+    cur_src_row = -1;
+    cur_sink_col = -1;
+    cur_sink_row = -1;
+    cur_trace_col = -1;
+    cur_trace_row = -1;
+    cur_wire_num = -1;
+    cur_state = IDLE;
+
+    sink_found = false;
+    multiple_sink = false;
+
+    clear_expansion_list();
+    clear_failed_list();
 }
 
 void reset_grid() {
@@ -572,15 +691,65 @@ LOCATION *make_location(int col, int row) {
     return g;
 }
 
+typedef enum DIRECTION {
+    TOP,
+    LEFT,
+    RIGHT,
+    BOTTOM
+} DIRECTION;
+
+LOCATION *create_neighbors(int col, int row, bool trace_back, int wire_num, DIRECTION d) {
+    int c, r;
+    char *text = "";
+    LOCATION *g = NULL;
+
+    switch (d) {
+        case TOP:
+            c = col;
+            r = row - 1;
+            text = "TOP";
+            break;
+        case BOTTOM:
+            c = col;
+            r = row + 1;
+            text = "BOTTOM";
+            break;
+        case LEFT:
+            c = col - 1;
+            r = row;
+            text = "LEFT";
+            break;
+        case RIGHT:
+            c = col + 1;
+            r = row;
+            text = "RIGHT";
+            break;
+    }
+    printf("Creating neighbors for (%d, %d) direction %s\n", col, row, text);
+
+
+    if (is_valid_neighbor(c, r, trace_back, wire_num)) {
+        g = make_location(c, r);
+        printf("Found %s neighbor (%d, %d)\n", text, c, r);
+    }
+
+    return g;
+}
+
 LOCATION *find_all_neighbors(int col, int row, bool trace_back, int wire_num) {
     // Neighbors is deemed as the one on top, below, left, and right of (col, row)
     LOCATION *neighbors = NULL;
-    int c, r;
-
-#ifdef DEBUG
     printf("Find all neighbors for (%d, %d)\n", col, row);
-#endif
 
+    for (int i = 0; i < 4; i++) {
+        DIRECTION d = (DIRECTION)((num_retries + i) % 4);
+        LOCATION *g = create_neighbors(col, row, trace_back, wire_num, d);
+        if (g != NULL) {
+            add_to_list(&neighbors, g);
+        }
+    }
+
+/*
     // Top
     c = col;
     r = row - 1;
@@ -624,6 +793,7 @@ LOCATION *find_all_neighbors(int col, int row, bool trace_back, int wire_num) {
         printf("Found right neighbor (%d, %d)\n", c, r);
 #endif
     }
+*/
     return neighbors;
 }
 
@@ -697,9 +867,10 @@ void run_lee_moore_algo() {
     } else if (sink_found == false) {
         // Loop has terminated (i.e. couldn't hit a sink), then fail
         printf("WARNING: Failed to route src (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
+        printf("Number of retries: %d\n", num_retries);
         if (num_retries < MAX_NUM_RETRIES) {
             if (multiple_sink) {
-                printf("Number of retries: %d\n", num_retries);
+                printf("multiple sink\n");
                 // Try another "source"
                 reset_grid();
                 sink_found = false;
@@ -709,13 +880,25 @@ void run_lee_moore_algo() {
                 cur_trace_row = -1;
                 num_retries++;
 
+                LOCATION *failed = make_location(cur_src_col, cur_src_row);
+                add_to_list(&failed_sources_for_multisink, failed);
+
                 // Need to find a new cur_src_col and new cur_src_row to route to the new sink
                 find_new_source_for_sink(cur_sink_col, cur_sink_row);
             } else {
-                // TODO: rip-up
+                printf("Current state: %d\n", cur_state);
+                if (cur_state == EXPANSION) {
+                    printf("Failed during expansion; Ripping up all previous nets\n");
+                    // rip-up all
+                    // reset_all();
+                } else if (cur_state == TRACEBACK) {
+                    printf("Failed during traceback\n");
+                }
+                num_retries++;
             }
         } else {
             printf("ERROR: Reached number of retries! Giving up\n");
+            num_failed_sinks++;
             num_retries = 0;
             cur_state = IDLE;
             reset_grid();
@@ -742,6 +925,8 @@ void run_lee_moore_algo() {
             printf("Successfully finished traceback of (%d, %d) on net %d\n", cur_src_col, cur_src_row, grid[cur_src_col][cur_src_row].wire_num);
             grid[cur_trace_col][cur_trace_row].is_wire = true;
 
+            num_successful_sinks++;
+
             // Check to see if there are more sinks for this net
             if (find_new_sink(cur_src_col, cur_src_row)) {
                 multiple_sink = true;
@@ -750,6 +935,7 @@ void run_lee_moore_algo() {
                 reset_grid();
                 sink_found = false;
                 clear_expansion_list();
+                clear_failed_list();
                 cur_state = IDLE;
                 cur_trace_col = -1;
                 cur_trace_row = -1;
@@ -758,6 +944,8 @@ void run_lee_moore_algo() {
                 find_new_source_for_sink(cur_sink_col, cur_sink_row);
             } else {
                 printf("We are done! Finished routing all sinks for source (%d, %d)\n", cur_src_col, cur_src_row);
+                printf("Number of sources: %d; Number of sinks: %d; Number of successful sinks: %d Number of failed sinks: %d\n",
+                    num_sources, num_sinks, num_successful_sinks, num_failed_sinks);
                 // We are done, reset counters and states
                 reset_grid();
                 reset_current();
@@ -828,9 +1016,7 @@ LOCATION *pop_from_list(LOCATION **head) {
 void add_to_list(LOCATION **head, LOCATION * g) {
     LOCATION *cur = *head;
 
-#ifdef DEBUG
     printf("Adding (%d, %d) to list\n", g->col, g->row);
-#endif
 
     if (*head == NULL) {
         *head = g;
